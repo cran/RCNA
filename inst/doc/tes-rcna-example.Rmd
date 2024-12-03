@@ -1,0 +1,421 @@
+---
+title: "Detecting Copy Number Variation on Targeted Exon Sequencing with RCNA"
+author: "Matt Bradley"
+date: "2024-11-20"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Detecting Copy Number Variation on Targeted Exon Sequencing with RCNA}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+## Introduction
+
+RCNA was designed with the purpose of detecting copy number alterations on targeted exon sequencing. While detecting copy number alterations are typically difficult when using discrete support, the RCNA package uses a conservative neighbor-based approach to provide robust results where previous low cost methods such as RNA microarrays cannot. While the regions of interest are not specifically required to be genes (or even exons for that matter) the example we provide in this vignette is performed on artificial data modeled after the original use-case in our paper. 
+
+The workflow for RCNA can be summarized as the following:
+- Estimate the GC-content-related bias present in the raw coverage data
+- Correct the GC-content bias based on the previous estimation
+- Estimate the normal karyotype ranges for each gene in the annotation file
+- Estimate the copy number alteration ratio based on the normal karyotype range estimations
+
+These steps can be executed as their own commmands, or using the `run_RCNA` function, as seen in the proceeding sections.
+
+## Example Data
+
+The data we use for this vignette can be found in the `data/` folder under `vignette`. This dataset has a number of genes specified in the annotation file, and the sample names, raw coverage files, and chrX normalization are specified in `sample.csv`. Below you can find how we transform the data from the raw flat files into a special S4 object used for analysis.
+
+
+``` r
+library(RCNA)
+samples <- read.csv(system.file("vignette", "samples.csv", package = "RCNA"), stringsAsFactors = FALSE)
+new.obj <- create_RCNA_object(sample.names = samples$sample.name, 
+                        ano.file = system.file("vignette" ,"annotations.csv", package = "RCNA"),
+                        out.dir = 'output',
+                        file.raw.coverage = file.path("data", samples$raw.cov.file),
+                        norm.cov.matrix = file.path("output", "norm-cov-matrix.csv.gz"),
+                        nkr = 0.9,
+                        x.norm = samples$x.norm,
+                        low.score.cutoff = -0.5,
+                        high.score.cutoff = 0.5,
+                        ncpu = ncpu)
+
+new.obj
+#> An object of class "RCNA_object"
+#> Slot "sample.names":
+#>  [1] "sample-0001" "sample-0002" "sample-0003" "sample-0004" "sample-0005" "sample-0006" "sample-0007" "sample-0008" "sample-0009" "sample-0010"
+#> 
+#> Slot "ano.file":
+#> [1] "/home/mbradley/R/x86_64-pc-linux-gnu-library/4.2/RCNA/vignette/annotations.csv"
+#> 
+#> Slot "out.dir":
+#> [1] "output"
+#> 
+#> Slot "ncpu":
+#> [1] 4
+#> 
+#> Slot "win.size":
+#> [1] 75
+#> 
+#> Slot "gc.step":
+#> [1] 0.01
+#> 
+#> Slot "estimate_gc":
+#> [1] TRUE
+#> 
+#> Slot "nkr":
+#> [1] 0.9
+#> 
+#> Slot "norm.cov.matrix":
+#> [1] "output/norm-cov-matrix.csv.gz"
+#> 
+#> Slot "low.score.cutoff":
+#> [1] -0.5
+#> 
+#> Slot "high.score.cutoff":
+#> [1] 0.5
+#> 
+#> Slot "gcParams":
+#>          file.raw.coverage sample.names                file.corrected.coverage
+#> 1  data/sample-0001.txt.gz  sample-0001 output/gc/sample-0001.corrected.txt.gz
+#> 2  data/sample-0002.txt.gz  sample-0002 output/gc/sample-0002.corrected.txt.gz
+#> 3  data/sample-0003.txt.gz  sample-0003 output/gc/sample-0003.corrected.txt.gz
+#> 4  data/sample-0004.txt.gz  sample-0004 output/gc/sample-0004.corrected.txt.gz
+#> 5  data/sample-0005.txt.gz  sample-0005 output/gc/sample-0005.corrected.txt.gz
+#> 6  data/sample-0006.txt.gz  sample-0006 output/gc/sample-0006.corrected.txt.gz
+#> 7  data/sample-0007.txt.gz  sample-0007 output/gc/sample-0007.corrected.txt.gz
+#> 8  data/sample-0008.txt.gz  sample-0008 output/gc/sample-0008.corrected.txt.gz
+#> 9  data/sample-0009.txt.gz  sample-0009 output/gc/sample-0009.corrected.txt.gz
+#> 10 data/sample-0010.txt.gz  sample-0010 output/gc/sample-0010.corrected.txt.gz
+#> 
+#> Slot "nkrParams":
+#>                         file.nkr.coverage x.norm sample.names
+#> 1  output/gc/sample-0001.corrected.txt.gz  FALSE  sample-0001
+#> 2  output/gc/sample-0002.corrected.txt.gz  FALSE  sample-0002
+#> 3  output/gc/sample-0003.corrected.txt.gz  FALSE  sample-0003
+#> 4  output/gc/sample-0004.corrected.txt.gz  FALSE  sample-0004
+#> 5  output/gc/sample-0005.corrected.txt.gz  FALSE  sample-0005
+#> 6  output/gc/sample-0006.corrected.txt.gz  FALSE  sample-0006
+#> 7  output/gc/sample-0007.corrected.txt.gz  FALSE  sample-0007
+#> 8  output/gc/sample-0008.corrected.txt.gz  FALSE  sample-0008
+#> 9  output/gc/sample-0009.corrected.txt.gz  FALSE  sample-0009
+#> 10 output/gc/sample-0010.corrected.txt.gz  FALSE  sample-0010
+#> 
+#> Slot "scoreParams":
+#>                       file.score.coverage sample.names
+#> 1  output/gc/sample-0001.corrected.txt.gz  sample-0001
+#> 2  output/gc/sample-0002.corrected.txt.gz  sample-0002
+#> 3  output/gc/sample-0003.corrected.txt.gz  sample-0003
+#> 4  output/gc/sample-0004.corrected.txt.gz  sample-0004
+#> 5  output/gc/sample-0005.corrected.txt.gz  sample-0005
+#> 6  output/gc/sample-0006.corrected.txt.gz  sample-0006
+#> 7  output/gc/sample-0007.corrected.txt.gz  sample-0007
+#> 8  output/gc/sample-0008.corrected.txt.gz  sample-0008
+#> 9  output/gc/sample-0009.corrected.txt.gz  sample-0009
+#> 10 output/gc/sample-0010.corrected.txt.gz  sample-0010
+#> 
+#> Slot "commands":
+#> list()
+```
+
+**Note:** While the samples and annotation files have been included with this package, the raw coverage files are not included in this package as they are larger than what is allowed by CRAN. A release of the raw data may be included in future updates to this vignette.
+
+The form of the coverage file should be a space-separated file with no headers and match the exact format as seen below. The columns should represent (1) chromosome, (2) position, (3) target ID - this is optional but not used, (4) coverage in read depth, and (5) the DNA nucleotide base. This vignette uses 10 samples, each spanning 96 genes and exactly 336,583 base pairs. 
+
+``` r
+head(read.table(file.path("data", "sample-0001.txt.gz"), sep = " "))
+#>     V1      V2   V3   V4 V5
+#> 1 chr1 1787331 r456  977  T
+#> 2 chr1 1787332 r456 1004  T
+#> 3 chr1 1787333 r456  991  A
+#> 4 chr1 1787334 r456  994  G
+#> 5 chr1 1787335 r456 1049  T
+#> 6 chr1 1787336 r456 1022  T
+```
+
+The annotation file must be a comma-separated file with the columns seen below, including headers. They are (1) the name of the genetic feature, such as a gene name (2) chromosome, (3) feature start position, and (4) feature end position. This vignette uses two genes as features. 
+
+
+``` r
+head(read.csv(system.file("vignette" ,"annotations.csv", package = "RCNA")))
+#>   feature chromosome    start      end
+#> 1   ALAS2          X 55009055 55031064
+#> 2   SRSF2         17 76734115 76737374
+```
+
+## Estimate and Correct GC Bias
+
+The first step to the RCNA workflow is to estimate the GC-content bias in the raw coverage data. This is done using a sliding window approach, which first estimates the GC-content. The GC-content is then normalized against the mean coverage across all bases in the coverage file. Lastly, a corrective multiplicative factor is calculated for each GC-content "bin". Each bin represents a certain percentage of GC-content in a given window. This correction is then applied iteratively using a second sliding window. The size of the sliding window (in bp) can be specified using the `win.size` parameter (default = 75 bp). For this example we will use both the default `gc.step` and `win.size` parameters. This step can be accomplished by using the `correct_gc_bias` function, as shown below.
+
+**Note on performance:** This function will train and correct the **entire** coverage file. This is beneficial to the accuracy of the correction, as running the correction on only a few genes can result in biased results. Keeping this in mind, the run-time of the algorithm scales linearly in respect to both number of bases as well as the number of samples causing this step to occupy a vast majority of the entire workflow's run-time. We recommend using a pre-determined GC factor file or providing pre-corrected coverage files if possible to cut down on the execution time. 
+
+
+``` r
+gc.res <- correct_gc_bias(new.obj, estimate_gc = TRUE, verbose = TRUE)
+#> No output file column labeled `file.gc.factor` - defaulting to sample names. See `?correct_gc_bias()` for more information.
+#> Beginning GC estimation
+#> Calculating GC bias correction
+#> Feature score estimation succeeded!
+gc.res[[1]]
+#> An object of class "RCNA_analysis"
+#> Slot "call":
+#> [1] "estimate_gc_bias"
+#> 
+#> Slot "params":
+#> $file.raw.coverage
+#>  [1] "data/sample-0001.txt.gz" "data/sample-0002.txt.gz" "data/sample-0003.txt.gz" "data/sample-0004.txt.gz" "data/sample-0005.txt.gz" "data/sample-0006.txt.gz" "data/sample-0007.txt.gz" "data/sample-0008.txt.gz" "data/sample-0009.txt.gz"
+#> [10] "data/sample-0010.txt.gz"
+#> 
+#> $file.gc.factor
+#>  [1] "output/gc/sample-0001.gc.factor.txt" "output/gc/sample-0002.gc.factor.txt" "output/gc/sample-0003.gc.factor.txt" "output/gc/sample-0004.gc.factor.txt" "output/gc/sample-0005.gc.factor.txt" "output/gc/sample-0006.gc.factor.txt"
+#>  [7] "output/gc/sample-0007.gc.factor.txt" "output/gc/sample-0008.gc.factor.txt" "output/gc/sample-0009.gc.factor.txt" "output/gc/sample-0010.gc.factor.txt"
+#> 
+#> 
+#> Slot "res.files":
+#> $file.gc.factor
+#>  [1] "output/gc/sample-0001.gc.factor.txt" "output/gc/sample-0002.gc.factor.txt" "output/gc/sample-0003.gc.factor.txt" "output/gc/sample-0004.gc.factor.txt" "output/gc/sample-0005.gc.factor.txt" "output/gc/sample-0006.gc.factor.txt"
+#>  [7] "output/gc/sample-0007.gc.factor.txt" "output/gc/sample-0008.gc.factor.txt" "output/gc/sample-0009.gc.factor.txt" "output/gc/sample-0010.gc.factor.txt"
+gc.res[[2]]
+#> An object of class "RCNA_analysis"
+#> Slot "call":
+#> [1] "correct_gc_bias"
+#> 
+#> Slot "params":
+#> $win.size
+#> [1] 75
+#> 
+#> $gcParams
+#>          file.raw.coverage                file.corrected.coverage                      file.gc.factor sample.names
+#> 1  data/sample-0001.txt.gz output/gc/sample-0001.corrected.txt.gz output/gc/sample-0001.gc.factor.txt  sample-0001
+#> 2  data/sample-0002.txt.gz output/gc/sample-0002.corrected.txt.gz output/gc/sample-0002.gc.factor.txt  sample-0002
+#> 3  data/sample-0003.txt.gz output/gc/sample-0003.corrected.txt.gz output/gc/sample-0003.gc.factor.txt  sample-0003
+#> 4  data/sample-0004.txt.gz output/gc/sample-0004.corrected.txt.gz output/gc/sample-0004.gc.factor.txt  sample-0004
+#> 5  data/sample-0005.txt.gz output/gc/sample-0005.corrected.txt.gz output/gc/sample-0005.gc.factor.txt  sample-0005
+#> 6  data/sample-0006.txt.gz output/gc/sample-0006.corrected.txt.gz output/gc/sample-0006.gc.factor.txt  sample-0006
+#> 7  data/sample-0007.txt.gz output/gc/sample-0007.corrected.txt.gz output/gc/sample-0007.gc.factor.txt  sample-0007
+#> 8  data/sample-0008.txt.gz output/gc/sample-0008.corrected.txt.gz output/gc/sample-0008.gc.factor.txt  sample-0008
+#> 9  data/sample-0009.txt.gz output/gc/sample-0009.corrected.txt.gz output/gc/sample-0009.gc.factor.txt  sample-0009
+#> 10 data/sample-0010.txt.gz output/gc/sample-0010.corrected.txt.gz output/gc/sample-0010.gc.factor.txt  sample-0010
+#> 
+#> $gc.step
+#> [1] 0.01
+#> 
+#> 
+#> Slot "res.files":
+#> $file.corrected.coverage
+#>                         file.gc.factor                file.corrected.coverage
+#> 1  output/gc/sample-0001.gc.factor.txt output/gc/sample-0001.corrected.txt.gz
+#> 2  output/gc/sample-0002.gc.factor.txt output/gc/sample-0002.corrected.txt.gz
+#> 3  output/gc/sample-0003.gc.factor.txt output/gc/sample-0003.corrected.txt.gz
+#> 4  output/gc/sample-0004.gc.factor.txt output/gc/sample-0004.corrected.txt.gz
+#> 5  output/gc/sample-0005.gc.factor.txt output/gc/sample-0005.corrected.txt.gz
+#> 6  output/gc/sample-0006.gc.factor.txt output/gc/sample-0006.corrected.txt.gz
+#> 7  output/gc/sample-0007.gc.factor.txt output/gc/sample-0007.corrected.txt.gz
+#> 8  output/gc/sample-0008.gc.factor.txt output/gc/sample-0008.corrected.txt.gz
+#> 9  output/gc/sample-0009.gc.factor.txt output/gc/sample-0009.corrected.txt.gz
+#> 10 output/gc/sample-0010.gc.factor.txt output/gc/sample-0010.corrected.txt.gz
+new.obj@commands = gc.res
+```
+
+The return value of `correct_gc_bias` is an `RCNA_analysis` object which documents the workflow steps. 
+
+Alternatively, you can also choose not to estimate the GC bias and instead use a GC factor file. We can inspect the GC factor file that we generated from the previous step to see what the factor file should look like. 
+
+
+``` r
+gc.file <- read.table(file.path("output", "gc", "sample-0001.gc.factor.txt"), sep = "\t", stringsAsFactors = FALSE)
+colnames(gc.file) = c("Percent.GC", "Coverage.Correction.Factor")
+gc.file = gc.file[gc.file$Coverage.Correction.Factor > 0,]
+head(gc.file, n = 15)
+#>    Percent.GC Coverage.Correction.Factor
+#> 14       0.13                    0.14400
+#> 15       0.14                    0.13987
+#> 16       0.15                    0.15162
+#> 17       0.16                    0.16245
+#> 18       0.17                    0.19365
+#> 19       0.18                    0.24451
+#> 20       0.19                    0.32753
+#> 21       0.20                    0.36505
+#> 22       0.21                    0.50538
+#> 23       0.22                    0.60806
+#> 24       0.23                    0.63844
+#> 25       0.24                    0.68623
+#> 26       0.25                    0.70939
+#> 27       0.26                    0.76110
+#> 28       0.27                    0.75852
+```
+
+In the GC estimation step, a sliding window is applied to calculate the number of G and C bases within the window. Additionally, the window calculates the average coverage within the window normalized against mean coverage across all bases and is constantly adjusted as the sliding window proceeds down the coverage file. This results in a GC factor file that has a coverage ratio associated with each GC-content bin, corresponding to the percent of bases within a given sliding window region that are either G or C. The size of the GC-content bins can be adjusted using the `gc.step` parameter (default = 0.01), but the value must tile the interval of 0 to 1. 
+
+So long as this column scheme is followed, a user can also provide their own GC factor file using the `file.gc.factor` argument.  A smaller bin size may result in more finely-tuned bias correction at the cost of increased time to calculate the factor files. 
+
+## Estimating Normal Karyotype Range
+
+In the next step, we will estimate the expected "normal" karyotype range (NKR) for each feature in the annotation file. This will be used downstream to determine scores for features that exceed their respective features' NKR. This is similar to defining a confidence interval for the coverage, however it is centered around the mode-normalized median coverage across all samples in the analysis. Please note that the region analyzed is strictly where the coverage file and annotation file overlap - any regions in the coverage file that are not included within the range of a feature in the annotation file will **not** be analyzed. The ratio of coverage compared to the median is summarized in the file passed as the `norm.cov.matrix` argument. The normalized coverage ratio matrix will be generated if the file specified does not exist. Additionally, the `nkr` parameter is a quantile that defines what is considered as the "normal." This is considered similar to an alpha value when using bootstrapped confidence intervals. Below is an example of how one would execute this function. For this example, we have already specified the desired path of `norm.cov.matrix`, as well as the value for `nkr` (default = 0.9).
+
+This step can be accomplished by using the `estimate_nkr` function. 
+
+
+``` r
+nkr.res <- estimate_nkr(new.obj)
+#> Importing coverage matrix from previous run
+#> NKR estimation succeeded!
+nkr.res
+#> An object of class "RCNA_analysis"
+#> Slot "call":
+#> [1] "estimate_nkr"
+#> 
+#> Slot "params":
+#> $nkrParams
+#>                         file.nkr.coverage x.norm sample.names
+#> 1  output/gc/sample-0001.corrected.txt.gz  FALSE  sample-0001
+#> 2  output/gc/sample-0002.corrected.txt.gz  FALSE  sample-0002
+#> 3  output/gc/sample-0003.corrected.txt.gz  FALSE  sample-0003
+#> 4  output/gc/sample-0004.corrected.txt.gz  FALSE  sample-0004
+#> 5  output/gc/sample-0005.corrected.txt.gz  FALSE  sample-0005
+#> 6  output/gc/sample-0006.corrected.txt.gz  FALSE  sample-0006
+#> 7  output/gc/sample-0007.corrected.txt.gz  FALSE  sample-0007
+#> 8  output/gc/sample-0008.corrected.txt.gz  FALSE  sample-0008
+#> 9  output/gc/sample-0009.corrected.txt.gz  FALSE  sample-0009
+#> 10 output/gc/sample-0010.corrected.txt.gz  FALSE  sample-0010
+#> 
+#> $nkr
+#> [1] 0.9
+#> 
+#> $cov.ratios
+#> [1] "output/norm-cov-matrix.csv.gz"
+#> 
+#> 
+#> Slot "res.files":
+#> $Output
+#> [1] "ALAS2.RData" "SRSF2.RData"
+#> 
+#> $`Normalized coverage ratios`
+#> [1] "output/norm-cov-matrix.csv.gz"
+new.obj@commands[[3]] <- nkr.res
+```
+
+The resulting `.RData` files (found in `output/nkr/`) contain R workspace objects which define the normal karyotype ranges on each feature in the annotation file. There should be one file per feature. We can load one and inspect the contents if we so wish. Let's also take a look at the normalized coverage matrix too.
+
+
+``` r
+load(file.path("output", "nkr", nkr.res@res.files$Output[1]))
+head(res$raw)
+#>                     sample-0001 sample-0002 sample-0003 sample-0004 sample-0005 sample-0006 sample-0007 sample-0008 sample-0009 sample-0010
+#> ALAS2_chrX_55009180  -0.4712177   0.3079704  -0.5489125  -0.4938741 -0.07685428  -0.6372187  0.06688500  0.05838189   0.8210937   0.1710256
+#> ALAS2_chrX_55009181  -0.5421495   0.3375313  -0.5301404  -0.4759917 -0.04093790  -0.5775500  0.05953157  0.02246552   0.8261610   0.2160292
+#> ALAS2_chrX_55009182  -0.5991689   0.2725962  -0.5727809  -0.5267949 -0.06078825  -0.5995822  0.02852741  0.06799289   0.8366352   0.1749022
+#> ALAS2_chrX_55009183  -0.5206929   0.3876275  -0.4933843  -0.4266533 -0.07423166  -0.5755403  0.04197082  0.07797758   0.8431989   0.2068355
+#> ALAS2_chrX_55009184  -0.5002292   0.3359176  -0.6075949  -0.5254258 -0.10150053  -0.5629351  0.06923969  0.10888241   0.8308551   0.2418197
+#> ALAS2_chrX_55009185  -0.5282313   0.2823252  -0.5591150  -0.5149572 -0.05550205  -0.5885885  0.09700744  0.03702967   0.8127750   0.1673071
+```
+
+
+``` r
+norm.cov.mat = read.csv(nkr.res@res.files$`Normalized coverage ratios`, stringsAsFactors = FALSE)
+head(norm.cov.mat)
+#>               sample.0001 sample.0002 sample.0003   sample.0004 sample.0005 sample.0006 sample.0007 sample.0008 sample.0009 sample.0010
+#> _chr1_1787331  0.09619511 0.034520150  -0.2518999 -0.0409949001 -0.07862110  0.10284579  0.02632270  -0.1125486  0.10600302  -0.1263846
+#> _chr1_1787332  0.07800200 0.014416556  -0.1484041 -0.0233834615 -0.14537101  0.05658341  0.01301504  -0.2154538  0.07562834  -0.1691862
+#> _chr1_1787333  0.09349493 0.054155189  -0.1638869  0.0031294940 -0.04512092  0.10563155 -0.01780169  -0.1404977  0.17946723  -0.1549712
+#> _chr1_1787334  0.02663941 0.035837190  -0.2692994  0.0210334554 -0.05555740  0.04344290 -0.03570566  -0.2147050  0.07125268  -0.1644438
+#> _chr1_1787335  0.12655848 0.039913718  -0.2052132  0.0009800749 -0.10926807  0.06087082 -0.01565227  -0.1498817  0.15122988  -0.1489632
+#> _chr1_1787336  0.08408666 0.006827653  -0.2353454 -0.0157945579 -0.06202690  0.09588569  0.01166820  -0.2026655  0.13805799  -0.1346327
+```
+
+We can see that the `raw` attribute from the feature file lines up to the rows of the normalized coverage matrix that contain that feature. Both of these represent the normalized coverage at that location (found in the rows) for each sample (found in the column names). We can inspect the `estimate_nkr` results further to find the mode-normalized median coverage and the bounds on the normal karyotype range.
+
+
+``` r
+head(res$val.pos) # median coverage across ALL samples
+#> [1] -0.009236 -0.009236 -0.016130 -0.016130 -0.016130 -0.009236
+head(res$uci.pos) # NKR upper bound
+#> [1] 0.590188 0.606278 0.582818 0.638192 0.608133 0.574073
+head(res$lci.pos) # NKR lower bound
+#> [1] -0.597481 -0.561620 -0.599396 -0.550859 -0.587498 -0.575325
+```
+
+## Estimating feature score
+
+In the final step of the workflow we estimate the CNA score of a feature by calculating what percentage of the feature lands above the upper bound calculated in the previous step. This step outputs two files - one with **all** results and one with only the results that pass a score cutoff filter specified by the `score.cutoff` parameter(s) (default = 0.5). This parameter is important for removing false positives, and as seen in the original manuscript may require fine tuning to achieve an acceptable Type I error rate. 
+
+This step can be accomplished by using the `estimate_feature_score` function. 
+
+
+``` r
+score.res <- estimate_feature_score(new.obj)
+#> Feature score estimation succeeded!
+score.res
+#> An object of class "RCNA_analysis"
+#> Slot "call":
+#> [1] "estimate_feature_score"
+#> 
+#> Slot "params":
+#> $scoreParams
+#>                       file.score.coverage sample.names
+#> 1  output/gc/sample-0001.corrected.txt.gz  sample-0001
+#> 2  output/gc/sample-0002.corrected.txt.gz  sample-0002
+#> 3  output/gc/sample-0003.corrected.txt.gz  sample-0003
+#> 4  output/gc/sample-0004.corrected.txt.gz  sample-0004
+#> 5  output/gc/sample-0005.corrected.txt.gz  sample-0005
+#> 6  output/gc/sample-0006.corrected.txt.gz  sample-0006
+#> 7  output/gc/sample-0007.corrected.txt.gz  sample-0007
+#> 8  output/gc/sample-0008.corrected.txt.gz  sample-0008
+#> 9  output/gc/sample-0009.corrected.txt.gz  sample-0009
+#> 10 output/gc/sample-0010.corrected.txt.gz  sample-0010
+#> 
+#> $low.score.cutoff
+#> [1] -0.5
+#> 
+#> $high.score.cutoff
+#> [1] 0.5
+#> 
+#> 
+#> Slot "res.files":
+#> $Output
+#> [1] "RCNA-output-scorepass.csv" "RCNA-output.csv"
+new.obj@commands[[4]] <- score.res
+```
+
+Let's inspect the final results to get a better understanding of what they mean.
+
+
+``` r
+out.pass <- read.csv(file.path(new.obj@out.dir, "score", score.res@res.files$Output[[1]]), header = T, stringsAsFactors = F)
+out.all <- read.csv(file.path(new.obj@out.dir, "score", score.res@res.files$Output[[2]]), header = T, stringsAsFactors = F)
+out.all
+#>    Sample.Name Feature Chromosome Feature.Start.Position Feature.End.Position   Score Percent.Above.NKR Percent.Below.NKR Median.Normalized.log2.Ratio Feature.Positions
+#> 1  sample-0001   ALAS2       chrX               55009055             55031064 -0.0937              0.00              9.37                      -0.6073              1836
+#> 2  sample-0002   ALAS2       chrX               55009055             55031064  0.0005              0.05              0.00                       0.3021              1836
+#> 3  sample-0003   ALAS2       chrX               55009055             55031064 -0.7702              0.00             77.02                      -0.6852              1836
+#> 4  sample-0004   ALAS2       chrX               55009055             55031064 -0.0223              0.00              2.23                      -0.5378              1836
+#> 5  sample-0005   ALAS2       chrX               55009055             55031064  0.0033              0.33              0.00                      -0.0006              1836
+#> 6  sample-0006   ALAS2       chrX               55009055             55031064 -0.1138              0.00             11.38                      -0.5437              1836
+#> 7  sample-0007   ALAS2       chrX               55009055             55031064  0.0000              0.00              0.00                      -0.0116              1836
+#> 8  sample-0008   ALAS2       chrX               55009055             55031064  0.0000              0.00              0.00                       0.0576              1836
+#> 9  sample-0009   ALAS2       chrX               55009055             55031064  0.9553             95.53              0.00                       0.6512              1836
+#> 10 sample-0010   ALAS2       chrX               55009055             55031064  0.0408              4.08              0.00                       0.2703              1836
+#> 11 sample-0001   SRSF2      chr17               76734115             76737374  0.0616              6.16              0.00                       0.0292               666
+#> 12 sample-0002   SRSF2      chr17               76734115             76737374  0.4715             50.45              3.30                       0.0979               666
+#> 13 sample-0003   SRSF2      chr17               76734115             76737374  0.1291             12.91              0.00                       0.0235               666
+#> 14 sample-0004   SRSF2      chr17               76734115             76737374  0.1081             10.81              0.00                       0.0157               666
+#> 15 sample-0005   SRSF2      chr17               76734115             76737374 -0.7553              1.20             76.73                      -0.2732               666
+#> 16 sample-0006   SRSF2      chr17               76734115             76737374  0.0000              0.30              0.30                      -0.0132               666
+#> 17 sample-0007   SRSF2      chr17               76734115             76737374 -0.0841              0.15              8.56                      -0.1064               666
+#> 18 sample-0008   SRSF2      chr17               76734115             76737374  0.0060              1.05              0.45                      -0.1035               666
+#> 19 sample-0009   SRSF2      chr17               76734115             76737374  0.0165              3.30              1.65                       0.0083               666
+#> 20 sample-0010   SRSF2      chr17               76734115             76737374  0.0465             13.66              9.01                       0.0574               666
+```
+
+A score above 0 represents a feature that was detected to have a copy number gain, while a negative score represents a feature detected to have a copy number loss. The `Percent.Above.NKR` and `Percent.Below.NKR` fields represent which parts of the feature exhibit coverage that exceed the normal karyotype range. The last column represents the number of base pairs in the feature.
+
+## run_RCNA
+
+All of these functions can be ran in sequence by using the `run_RCNA` function included for convenience. It has a simple purpose - to run all three steps and return the input S4 object with the resulting `RCNA_analysis` objects attached to the `commands` slot. This function will always append the most recent `RCNA_analysis` object to the end of the commands slot, so multiple runs will have the full history if you use the same S4 object.
+
+
+``` r
+res.object <- run_RCNA(new.obj)
+```

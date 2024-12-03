@@ -1,0 +1,158 @@
+---
+title: "Detecting Copy Number Variation on Targeted Exon Sequencing with RCNA"
+author: "Matt Bradley"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Detecting Copy Number Variation on Targeted Exon Sequencing with RCNA}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+library(RCNA)
+library(parallel)
+message("Number of Cores detected: ", detectCores())
+ncpu = detectCores()
+```
+
+## Introduction
+
+RCNA was designed with the purpose of detecting copy number alterations on targeted exon sequencing. While detecting copy number alterations are typically difficult when using discrete support, the RCNA package uses a conservative neighbor-based approach to provide robust results where previous low cost methods such as RNA microarrays cannot. While the regions of interest are not specifically required to be genes (or even exons for that matter) the example we provide in this vignette is performed on artificial data modeled after the original use-case in our paper. 
+
+The workflow for RCNA can be summarized as the following:
+- Estimate the GC-content-related bias present in the raw coverage data
+- Correct the GC-content bias based on the previous estimation
+- Estimate the normal karyotype ranges for each gene in the annotation file
+- Estimate the copy number alteration ratio based on the normal karyotype range estimations
+
+These steps can be executed as their own commmands, or using the `run_RCNA` function, as seen in the proceeding sections.
+
+## Example Data
+
+The data we use for this vignette can be found in the `data/` folder under `vignette`. This dataset has a number of genes specified in the annotation file, and the sample names, raw coverage files, and chrX normalization are specified in `sample.csv`. Below you can find how we transform the data from the raw flat files into a special S4 object used for analysis.
+
+```{r Create_obj}
+library(RCNA)
+samples <- read.csv(system.file("vignette", "samples.csv", package = "RCNA"), stringsAsFactors = FALSE)
+new.obj <- create_RCNA_object(sample.names = samples$sample.name, 
+                        ano.file = system.file("vignette" ,"annotations.csv", package = "RCNA"),
+                        out.dir = 'output',
+                        file.raw.coverage = file.path("data", samples$raw.cov.file),
+                        norm.cov.matrix = file.path("output", "norm-cov-matrix.csv.gz"),
+                        nkr = 0.9,
+                        x.norm = samples$x.norm,
+                        low.score.cutoff = -0.5,
+                        high.score.cutoff = 0.5,
+                        ncpu = ncpu)
+
+new.obj
+```
+
+**Note:** While the samples and annotation files have been included with this package, the raw coverage files are not included in this package as they are larger than what is allowed by CRAN. A release of the raw data may be included in future updates to this vignette.
+
+The form of the coverage file should be a space-separated file with no headers and match the exact format as seen below. The columns should represent (1) chromosome, (2) position, (3) target ID - this is optional but not used, (4) coverage in read depth, and (5) the DNA nucleotide base. This vignette uses 10 samples, each spanning 96 genes and exactly 336,583 base pairs. 
+
+```{r cov_example}
+head(read.table(file.path("data", "sample-0001.txt.gz"), sep = " "))
+```
+
+The annotation file must be a comma-separated file with the columns seen below, including headers. They are (1) the name of the genetic feature, such as a gene name (2) chromosome, (3) feature start position, and (4) feature end position. This vignette uses two genes as features. 
+
+```{r}
+head(read.csv(system.file("vignette" ,"annotations.csv", package = "RCNA")))
+```
+
+## Estimate and Correct GC Bias
+
+The first step to the RCNA workflow is to estimate the GC-content bias in the raw coverage data. This is done using a sliding window approach, which first estimates the GC-content. The GC-content is then normalized against the mean coverage across all bases in the coverage file. Lastly, a corrective multiplicative factor is calculated for each GC-content "bin". Each bin represents a certain percentage of GC-content in a given window. This correction is then applied iteratively using a second sliding window. The size of the sliding window (in bp) can be specified using the `win.size` parameter (default = 75 bp). For this example we will use both the default `gc.step` and `win.size` parameters. This step can be accomplished by using the `correct_gc_bias` function, as shown below.
+
+**Note on performance:** This function will train and correct the **entire** coverage file. This is beneficial to the accuracy of the correction, as running the correction on only a few genes can result in biased results. Keeping this in mind, the run-time of the algorithm scales linearly in respect to both number of bases as well as the number of samples causing this step to occupy a vast majority of the entire workflow's run-time. We recommend using a pre-determined GC factor file or providing pre-corrected coverage files if possible to cut down on the execution time. For this vignette, we use a 96-gene 
+
+```{r correct_gc_bias}
+gc.res <- correct_gc_bias(new.obj, estimate_gc = TRUE, verbose = TRUE)
+gc.res[[1]]
+gc.res[[2]]
+new.obj@commands = gc.res
+```
+
+The return value of `correct_gc_bias` is an `RCNA_analysis` object which documents the workflow steps. 
+
+Alternatively, you can also choose not to estimate the GC bias and instead use a GC factor file. We can inspect the GC factor file that we generated from the previous step to see what the factor file should look like. 
+
+```{r gc_file}
+gc.file <- read.table(file.path("output", "gc", "sample-0001.gc.factor.txt"), sep = "\t", stringsAsFactors = FALSE)
+colnames(gc.file) = c("Percent.GC", "Coverage.Correction.Factor")
+gc.file = gc.file[gc.file$Coverage.Correction.Factor > 0,]
+head(gc.file, n = 15)
+```
+
+In the GC estimation step, a sliding window is applied to calculate the number of G and C bases within the window. Additionally, the window calculates the average coverage within the window normalized against mean coverage across all bases and is constantly adjusted as the sliding window proceeds down the coverage file. This results in a GC factor file that has a coverage ratio associated with each GC-content bin, corresponding to the percent of bases within a given sliding window region that are either G or C. The size of the GC-content bins can be adjusted using the `gc.step` parameter (default = 0.01), but the value must tile the interval of 0 to 1. 
+
+So long as this column scheme is followed, a user can also provide their own GC factor file using the `file.gc.factor` argument.  A smaller bin size may result in more finely-tuned bias correction at the cost of increased time to calculate the factor files. 
+
+## Estimating Normal Karyotype Range
+
+In the next step, we will estimate the expected "normal" karyotype range (NKR) for each feature in the annotation file. This will be used downstream to determine scores for features that exceed their respective features' NKR. This is similar to defining a confidence interval for the coverage, however it is centered around the mode-normalized median coverage across all samples in the analysis. Please note that the region analyzed is strictly where the coverage file and annotation file overlap - any regions in the coverage file that are not included within the range of a feature in the annotation file will **not** be analyzed. The ratio of coverage compared to the median is summarized in the file passed as the `norm.cov.matrix` argument. The normalized coverage ratio matrix will be generated if the file specified does not exist. Additionally, the `nkr` parameter is a quantile that defines what is considered as the "normal." This is considered similar to an alpha value when using bootstrapped confidence intervals. Below is an example of how one would execute this function. For this example, we have already specified the desired path of `norm.cov.matrix`, as well as the value for `nkr` (default = 0.9).
+
+This step can be accomplished by using the `estimate_nkr` function. 
+
+```{r estimate_nkr}
+nkr.res <- estimate_nkr(new.obj)
+nkr.res
+new.obj@commands[[3]] <- nkr.res
+```
+
+The resulting `.RData` files (found in `output/nkr/`) contain R workspace objects which define the normal karyotype ranges on each feature in the annotation file. There should be one file per feature. We can load one and inspect the contents if we so wish. Let's also take a look at the normalized coverage matrix too.
+
+```{r nkr_res}
+load(file.path("output", "nkr", nkr.res@res.files$Output[1]))
+head(res$raw)
+```
+
+```{r norm.cov.mat}
+norm.cov.mat = read.csv(nkr.res@res.files$`Normalized coverage ratios`, stringsAsFactors = FALSE)
+head(norm.cov.mat)
+```
+
+We can see that the `raw` attribute from the feature file lines up to the rows of the normalized coverage matrix that contain that feature. Both of these represent the normalized coverage at that location (found in the rows) for each sample (found in the column names). We can inspect the `estimate_nkr` results further to find the mode-normalized median coverage and the bounds on the normal karyotype range.
+
+```{r res_pos}
+head(res$val.pos) # median coverage across ALL samples
+head(res$uci.pos) # NKR upper bound
+head(res$lci.pos) # NKR lower bound
+```
+
+## Estimating feature score
+
+In the final step of the workflow we estimate the CNA score of a feature by calculating what percentage of the feature lands above the upper bound calculated in the previous step. This step outputs two files - one with **all** results and one with only the results that pass a score cutoff filter specified by the `score.cutoff` parameter(s) (default = 0.5). This parameter is important for removing false positives, and as seen in the original manuscript may require fine tuning to achieve an acceptable Type I error rate. 
+
+This step can be accomplished by using the `estimate_feature_score` function. 
+
+```{r estimate_feature_score}
+score.res <- estimate_feature_score(new.obj)
+score.res
+new.obj@commands[[4]] <- score.res
+```
+
+Let's inspect the final results to get a better understanding of what they mean.
+
+```{r score_res}
+out.pass <- read.csv(file.path(new.obj@out.dir, "score", score.res@res.files$Output[[1]]), header = T, stringsAsFactors = F)
+out.all <- read.csv(file.path(new.obj@out.dir, "score", score.res@res.files$Output[[2]]), header = T, stringsAsFactors = F)
+out.all
+```
+
+A score above 0 represents a feature that was detected to have a copy number gain, while a negative score represents a feature detected to have a copy number loss. The `Percent.Above.NKR` and `Percent.Below.NKR` fields represent which parts of the feature exhibit coverage that exceed the normal karyotype range. The last column represents the number of base pairs in the feature.
+
+## run_RCNA
+
+All of these functions can be ran in sequence by using the `run_RCNA` function included for convenience. It has a simple purpose - to run all three steps and return the input S4 object with the resulting `RCNA_analysis` objects attached to the `commands` slot. This function will always append the most recent `RCNA_analysis` object to the end of the commands slot, so multiple runs will have the full history if you use the same S4 object.
+
+```{r run_RCNA, eval = FALSE}
+res.object <- run_RCNA(new.obj)
+```
